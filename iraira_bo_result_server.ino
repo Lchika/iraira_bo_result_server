@@ -10,7 +10,9 @@
 //  define定義
 #define ONE_DIGIT_PIN       27
 #define TWO_DIGIT_PIN       26
-#define THREE_DIGIT_PIN     25    
+#define THREE_DIGIT_PIN     25
+#define PIN_HSERIAL_RX      21
+#define PIN_HSERIAL_TX      22 
 
 //  グローバル変数定義
 int output_pins[] = {12, 13, 14, 15, 16, 17, 18, 19};
@@ -18,7 +20,8 @@ Ticker ticker1;
 //Ticker ticker2;
 SegDisp segDisp = SegDisp(output_pins);
 bool is_ready_flash = false;
-RankingManager rankingManager;
+HardwareSerial serial_voice_module(1);
+RankingManager *rankingManager;
 // webサーバの生成
 SimpleWebServer server("ESP32AP", "12345678", IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0), 80);
 uint8_t root_html[16384];     //  /index.html
@@ -48,6 +51,16 @@ void setup(){
   digitalWrite(ONE_DIGIT_PIN, HIGH);
   digitalWrite(TWO_DIGIT_PIN, HIGH);
   digitalWrite(THREE_DIGIT_PIN, HIGH);
+
+  serial_voice_module.begin(9600, SERIAL_8N1, PIN_HSERIAL_RX, PIN_HSERIAL_TX);
+  volume(0x10);
+
+  initParam init_param;
+  init_param.call_backs["onDataAdd"] = [](rankingData_S rank_data[], int length){
+    play(0x01);
+    };
+  rankingManager = new RankingManager(init_param);
+
   segDisp.setDispNumber(0);
   ticker1.attach_ms(1, flash_7seg);
   //ticker2.attach_ms(10000, make_root_html);
@@ -103,7 +116,7 @@ static void handle_root_post(String query){
   Serial.println("time = " + map_query["time"] + ", miss = " + map_query["miss"]);
 
   //  ランキングに登録
-  rankingManager.setData(map_query["time"].toInt(), map_query["miss"].toInt());
+  rankingManager->setData(map_query["time"].toInt(), map_query["miss"].toInt());
 
   //  ランキング表示用HTMLを更新
   make_root_html();
@@ -182,7 +195,7 @@ static String getStringTime(int time){
 /*-------------------------------------------------*/
 static String getHtmlByRank(int rank){
   String html = "";
-  rankingData_S ranking_data = rankingManager.getDataByRank(rank);
+  rankingData_S ranking_data = rankingManager->getDataByRank(rank);
   html += getStringAddedTag(String(rank), "td");
   html += getStringAddedTag(getStringTime(ranking_data.time), "td");
   html += getStringAddedTag(String(ranking_data.miss), "td");
@@ -216,7 +229,7 @@ static void make_root_html(){
   String body_html = "<body><table><caption>ランキング</caption>"
     "<tr><th>順位</th><th>タイム</th><th>ミス回数</th>"
     "<th>ミスペナルティ込みのタイム</th></tr>";
-  for(int i = 0; i < rankingManager.RANKING_DATA_NUM; i++){
+  for(int i = 0; i < rankingManager->RANKING_DATA_NUM; i++){
     body_html += getHtmlByRank(i+1);
   }
   body_html += "</table></body>";
@@ -233,4 +246,16 @@ static void make_root_html(){
   memcpy(root_html + total_size, footer_html, size);
   total_size += size;
   return;
+}
+
+void play(unsigned char Track)
+{
+  unsigned char play[6] = {0xAA,0x07,0x02,0x00,Track,Track+0xB3};
+  serial_voice_module.write(play, 6);
+}
+
+void volume( unsigned char vol)
+{
+  unsigned char volume[5] = {0xAA,0x13,0x01,vol,vol+0xBE};
+  serial_voice_module.write(volume, 5);
 }

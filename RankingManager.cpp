@@ -17,6 +17,16 @@ RankingManager::RankingManager(void){
   }
 }
 
+RankingManager::RankingManager(initParam init_param)
+  :_call_backs(init_param.call_backs)
+{
+  memset(ranking_data, 0, sizeof(ranking_data));
+  //  全てのスコアを適当にでかい値にしておく
+  for(int i = 0; i < RANKING_DATA_NUM; i++){
+    ranking_data[i].score = 3141592;
+  }
+}
+
 void RankingManager::setData(int time_input, int miss_input){
   rankingData_S data_tmp;
   rankingData_S data_new = makeRankingData(time_input, miss_input);
@@ -27,6 +37,10 @@ void RankingManager::setData(int time_input, int miss_input){
       ranking_data[target] = data_new;
       data_new = data_tmp;
     }
+  }
+  auto itr = _call_backs.find("onDataAdd");
+  if(itr != _call_backs.end()){
+    itr->second(ranking_data, RANKING_DATA_NUM);
   }
   return;
 }
