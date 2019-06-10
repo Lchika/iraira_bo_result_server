@@ -6,13 +6,17 @@
 #include "SimpleWebServer.h"
 #include "SegDisp.h"
 #include "RankingManager.hpp"
+#include <Preferences.h>        // 不揮発領域管理用ライブラリ
+#include <HTTPClient.h>
 
 //  define定義
 #define ONE_DIGIT_PIN       27
 #define TWO_DIGIT_PIN       26
 #define THREE_DIGIT_PIN     25
 #define PIN_HSERIAL_RX      21
-#define PIN_HSERIAL_TX      22 
+#define PIN_HSERIAL_TX      22
+#define MAX_TRY_CONNECT       50      // 最大WiFi接続試行回数
+#define MAX_TRY_CONNECT_INI   10      // 最大WiFi接続試行回数(初期接続)
 
 //  グローバル変数定義
 int output_pins[] = {12, 13, 14, 15, 16, 17, 18, 19};
@@ -22,9 +26,16 @@ SegDisp segDisp = SegDisp(output_pins);
 bool is_ready_flash = false;
 HardwareSerial serial_voice_module(1);
 RankingManager *rankingManager;
+IPAddress ip(192, 168, 100, 111);        // for fixed IP Address
+IPAddress gateway(192, 168, 1, 1);       //
+IPAddress subnet(255, 255, 255, 0);      //
 // webサーバの生成
-SimpleWebServer server("ESP32AP", "12345678", IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0), 80);
+SimpleWebServer server("ESP32AP", "12345678", ip, IPAddress(255, 255, 255, 0), 80);
 uint8_t root_html[16384];     //  /index.html
+uint8_t success_html[16384];  //  /success.html
+uint8_t access_html[16384];   //  /access.html
+// 不揮発領域アクセス用クラス
+Preferences preferences;
 
 //  内部関数定義
 static void set_server(void);
@@ -51,6 +62,13 @@ void setup(){
   digitalWrite(ONE_DIGIT_PIN, HIGH);
   digitalWrite(TWO_DIGIT_PIN, HIGH);
   digitalWrite(THREE_DIGIT_PIN, HIGH);
+  
+  // 不揮発性領域へのアクセス開始
+  preferences.begin("ssid_1", false);
+  preferences.begin("pass_1", false);
+  preferences.begin("ssid_2", false);
+  preferences.begin("pass_2", false);
+  preferences.begin("num_saved_id", false);
 
   serial_voice_module.begin(9600, SERIAL_8N1, PIN_HSERIAL_RX, PIN_HSERIAL_TX);
   volume(0x10);
@@ -70,6 +88,60 @@ void setup(){
 
   //  webサーバ設定処理
   set_server();
+
+  // 一度記憶情報を用いてWiFi接続を試みる
+  if (!WiFi.config(ip, gateway, subnet)) {
+    Serial.println("STA Failed to configure");
+  }
+  Serial.print("num_saved_id = ");
+  Serial.println(preferences.getInt("num_saved_id", 0));
+  Serial.print("ssid_1 = ");
+  Serial.print(preferences.getString("ssid_1", ""));
+  Serial.print(", pass1 = ");
+  Serial.println(preferences.getString("pass_1", ""));
+  WiFi.begin(preferences.getString("ssid_1", "").c_str(), preferences.getString("pass_1", "").c_str());
+
+  int connect_try_count = 0;
+  while (WiFi.status() != WL_CONNECTED && connect_try_count < MAX_TRY_CONNECT_INI) {
+    delay(500);
+    Serial.print(".");
+    connect_try_count++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {  
+    Serial.println("");
+    Serial.println("WiFi connected.");
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+    return;
+  } else {
+    Serial.println("WiFi connect process time out.");
+  }
+
+  // 繰り返し、今度はssid_2を使う
+  // ! ToDo 関数化する
+  connect_try_count = 0;
+  Serial.print("ssid_2 = ");
+  Serial.print(preferences.getString("ssid_2", ""));
+  Serial.print(", pass2 = ");
+  Serial.println(preferences.getString("pass_2", ""));
+  WiFi.begin(preferences.getString("ssid_2", "").c_str(), preferences.getString("pass_2", "").c_str());
+
+  while (WiFi.status() != WL_CONNECTED && connect_try_count < MAX_TRY_CONNECT_INI) {
+    delay(500);
+    Serial.print(".");
+    connect_try_count++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {  
+    Serial.println("");
+    Serial.println("WiFi connected.");
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+    return;
+  } else {
+    Serial.println("WiFi connect process time out.");
+  }
   return;
 }
 
@@ -89,9 +161,32 @@ void loop(){
 // webサーバ設定処理
 /*-------------------------------------------------*/
 static void set_server(){
+  // パス設定
+  const char *access_path = "/access.html";
+  const char *success_path = "/success.html";
+  // htmlファイル読み込み用変数
+  File html_file;
+  size_t size;
+  
+  // esp32に記憶させてあるhtmlファイルを読み込んでいく
+  // access.htmlを読み込む
+  SPIFFS.begin();
+  // access.htmlを読み込む
+  html_file = SPIFFS.open(access_path, "r");
+  size = html_file.size();
+  html_file.read(access_html, size);
+  html_file.close();
+  // success.htmlを読み込む
+  html_file = SPIFFS.open(success_path, "r");
+  size = html_file.size();
+  html_file.read(success_html, size);
+  html_file.close();
+  
   //  urlハンドラの設定
   server.add_handler("/", handle_root_get);
   server.add_handler_post("/", handle_root_post);
+  server.add_handler("/access.html", handle_access_get);
+  server.add_handler_post("/access.html", handle_access_post);
   server.begin();
   return;
 }
@@ -126,6 +221,73 @@ static void handle_root_post(String query){
 
   server.send_status(200);
   return;
+}
+
+// GET /access.html
+void handle_access_get(){
+  server.send_html(200, (char *)access_html);
+}
+
+// POST /access.html
+void handle_access_post(String query){
+  std::map<String, String> map_query;
+  int connect_try_count = 0;
+
+  // クエリの解析
+  analyze_query(query, map_query);
+  Serial.print("ssid = ");
+  Serial.print(map_query["ssid"]);
+  Serial.print(", password = ");
+  Serial.println(map_query["password"]);
+
+  // WiFi接続処理  
+  Serial.println();
+  Serial.println();
+  if (!WiFi.config(ip, gateway, subnet)) {
+    Serial.println("STA Failed to configure");
+  }
+  Serial.print("Connecting to ");
+  Serial.println(map_query["ssid"]);
+  WiFi.begin(map_query["ssid"].c_str(), map_query["password"].c_str());
+
+  while (WiFi.status() != WL_CONNECTED && connect_try_count < MAX_TRY_CONNECT) {
+    delay(500);
+    Serial.print(".");
+    connect_try_count++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("");
+    Serial.println("WiFi connected.");
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+
+    // 接続成功したssid、passwordを覚えておく
+    int num_saved_id = preferences.getInt("num_saved_id", 0);
+    Serial.print("num_saved_id = ");
+    Serial.println(num_saved_id);
+    if(num_saved_id >= 2){
+      num_saved_id = 0;
+      preferences.putInt("num_saved_id", 0);
+      Serial.println("reset num_saved_id -> 0");
+    }
+    if(num_saved_id == 0){
+      preferences.putString("ssid_1", map_query["ssid"]);
+      preferences.putString("pass_1", map_query["password"]);
+      preferences.putInt("num_saved_id", num_saved_id + 1);
+      Serial.println("Stored SSID + PASSWORD in storage 1.");
+    }else if(num_saved_id == 1){
+      preferences.putString("ssid_2", map_query["ssid"]);
+      preferences.putString("pass_2", map_query["password"]);
+      preferences.putInt("num_saved_id", num_saved_id + 1);
+      Serial.println("Stored SSID + PASSWORD in storage 2.");
+    }
+
+  } else {
+    Serial.println("WiFi connect process time out.");
+  } 
+  
+  server.send_html(200, (char *)success_html);
 }
 
 /*-------------------------------------------------*/
