@@ -8,6 +8,7 @@
 #include "RankingManager.hpp"
 #include <Preferences.h>        // 不揮発領域管理用ライブラリ
 #include <HTTPClient.h>
+#include <ArduinoJson.h>
 
 //  define定義
 #define ONE_DIGIT_PIN       27
@@ -17,6 +18,12 @@
 #define PIN_HSERIAL_TX      22
 #define MAX_TRY_CONNECT       50      // 最大WiFi接続試行回数
 #define MAX_TRY_CONNECT_INI   10      // 最大WiFi接続試行回数(初期接続)
+#define INTERVAL_7SEG_FLASH   5
+#define INTERVAL_MAIN_LOOP    100
+#define USE_ARDUINO_JSON
+
+//  定数定義
+const size_t capacity = JSON_OBJECT_SIZE(1) + JSON_OBJECT_SIZE(4) + 70;
 
 //  グローバル変数定義
 int output_pins[] = {12, 13, 14, 15, 16, 17, 18, 19};
@@ -36,6 +43,8 @@ uint8_t success_html[16384];  //  /success.html
 uint8_t access_html[16384];   //  /access.html
 // 不揮発領域アクセス用クラス
 Preferences preferences;
+// jsonパーサ用バッファ
+DynamicJsonDocument doc(capacity);
 
 //  内部関数定義
 static void set_server(void);
@@ -74,13 +83,19 @@ void setup(){
   volume(0x10);
 
   initParam init_param;
-  init_param.call_backs["onDataAdd"] = [](rankingData_S rank_data[], int length){
-    play(0x01);
-    };
+  init_param.call_backs["onDataAdd"] = [](int rank, rankingData_S rank_data[], int length){
+    if(rank <= 1){
+      play(0x03);
+    }else if(rank <= 10){
+      play(0x02);
+    }else{
+      play(0x01);
+    }
+  };
   rankingManager = new RankingManager(init_param);
 
   segDisp.setDispNumber(0);
-  ticker1.attach_ms(1, flash_7seg);
+  ticker1.attach_ms(INTERVAL_7SEG_FLASH, flash_7seg);
   //ticker2.attach_ms(10000, make_root_html);
   
   //  ランキング表示用HTMLを初期化
@@ -154,6 +169,7 @@ void loop(){
   //uint32_t time = millis();
   //segDisp.setDispNumber(time / 1000);
   //Serial.println(time / 1000);
+  delay(INTERVAL_MAIN_LOOP);
   return;
 }
 
@@ -294,9 +310,17 @@ void handle_access_post(String query){
 // クエリ解析処理
 /*-------------------------------------------------*/
 static void analyze_query(String query, std::map<String, String> &map_query){
+#ifdef USE_ARDUINO_JSON
+  deserializeJson(doc, query);
+  long score_time = doc["score"]["time"];
+  long score_miss = doc["score"]["miss"];
+  map_query["time"] = String(score_time);
+  map_query["miss"] = String(score_miss);
+#else
   int pos = 0;
   int index = 0;
   String q_name = "";
+  Serial.println("q = " + query);
   while(true){
     index = query.indexOf("=", pos);
     if (index > 0) {
@@ -323,6 +347,7 @@ static void analyze_query(String query, std::map<String, String> &map_query){
       break;
     }
   }
+#endif
   return;
 }
 

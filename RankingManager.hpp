@@ -12,7 +12,7 @@ typedef struct{
 }rankingData_S;
 
 typedef struct{
-  std::map<String, std::function<void(rankingData_S rankData[], int length)>> call_backs;
+  std::map<String, std::function<void(int rank, rankingData_S rankData[], int length)>> call_backs;
 }initParam;
 
 class RankingManager{
@@ -28,7 +28,7 @@ private:
   static const int MISS_PENALTY = 10;       //  1回のミスで加算されるタイム
   rankingData_S ranking_data[RANKING_DATA_NUM];
   rankingData_S makeRankingData(int time, int miss);
-  std::map<String, std::function<void(rankingData_S rankData[], int length)>> _call_backs;
+  initParam _initParam;
 };
 
 #endif
